@@ -1,0 +1,12 @@
+{
+"plate_reader": "AB",
+"cycle_time": 30,
+"michaelis_menten_fit": "False",
+"progress_curve_fit": "True",
+"baseline_subtraction": "False",
+"plate_list": "A1,A2,A3",
+"substrate_concentration": "1,1,1",
+"enzyme_concentration": 10,
+"F_cleaved":  35100e9,
+"F_uncleaved": 3380e9
+}
