@@ -16,7 +16,7 @@ if __name__ == "__main__":
     root.destroy()
     plt.rcParams.update({'font.size': 15})
 
-if True:
+try:
     # Inputs (config.json file)
     with open("config.json") as f:
         config = json.load(f)
@@ -72,21 +72,20 @@ if True:
     if mm_fitting and not total_fitting:
         def calc_velocities(curve, time):
             """
-            Computes initial slope of the progress curve using the 4th order
-            forward difference scheme.
+            Computes the maximal slope of a list.
             list : progress curve values.
             time : time array.
             """
             id_right = len(curve)
             best_r = 0
             best_slope = 0
-            while best_r**2 < 0.8 and id_right > 5:
+            while best_r**2 < 0.9 and id_right > 5:
                 slope, intercept, r, p, se = linregress(time[0:id_right],
                                                         curve[0:id_right])
-                if r**2 > best_r**2:
+                if slope > best_slope:
                     best_r, best_slope = r, slope
                 id_right = id_right-1
-            return max(best_slope, 0)
+            return best_slope
 
         velocities = np.zeros(len(plate_list))
         for id, plate in enumerate(plate_list):
@@ -231,7 +230,7 @@ if True:
         print("Only one fit expected, two or zero asked.")
 
 
-else:
+except ValueError:
     print(
         "The CSV file could not be read.\
  Make sure your file is in the right format."
