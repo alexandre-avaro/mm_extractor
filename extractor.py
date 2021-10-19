@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import json
 from scipy.optimize import curve_fit
-from scipy.stats import linregress
 from scipy.special import lambertw
 
 # File selection
@@ -70,22 +69,10 @@ try:
 
     # Michaelis-Menten "traditional" fitting
     if mm_fitting and not total_fitting:
-        def calc_velocities(curve, time):
-            """
-            Computes the maximal slope of a list.
-            list : progress curve values.
-            time : time array.
-            """
-            id_right = len(curve)
-            best_r = 0
-            best_slope = 0
-            while best_r**2 < 0.9 and id_right > 5:
-                slope, intercept, r, p, se = linregress(time[0:id_right],
-                                                        curve[0:id_right])
-                if slope > best_slope:
-                    best_r, best_slope = r, slope
-                id_right = id_right-1
-            return best_slope
+        def moving_average(a, t, n=5):
+            ret = np.cumsum(a, dtype=float)
+            ret[n:] = ret[n:] - ret[:-n]
+            return t[int(np.floor(n/2)):-int(np.floor(n/2))], ret[n - 1:] / n
 
         velocities = np.zeros(len(plate_list))
         for id, plate in enumerate(plate_list):
@@ -97,7 +84,11 @@ try:
                                                    )
                                        )
                                       )
-            velocities[id] = calc_velocities(data[plate], time)
+            smooth_t, smooth_data = moving_average(np.array(data[plate]), time)
+            grad_t, grad = moving_average(
+                np.gradient(smooth_data, smooth_t[1]-smooth_t[0]),
+                smooth_t)
+            velocities[id] = np.max(grad)
 
         def michaelis_menten_fun(x, kcatf, Kmf):
             """
@@ -116,7 +107,7 @@ try:
         )
 
         # Plot and print results
-        if np.sqrt(cov[0][0])/param[0] + np.sqrt(cov[1][1])/param[1] <= 1:
+        if np.sqrt(cov[0][0])/param[0] + np.sqrt(cov[1][1])/param[1] <= 2:
             plt.plot(np.multiply(
                 substrate_concentrations,
                 1e6),
