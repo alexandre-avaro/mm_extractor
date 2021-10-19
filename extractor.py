@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import json
 from scipy.optimize import curve_fit
+from scipy.stats import linregress
 from scipy.special import lambertw
 
 # File selection
@@ -38,12 +39,17 @@ try:
         return data
 
     if config['plate_reader'] == "BioRad":
-        data = pd.read_csv(file_path, sep=';')
-        time = np.multiply([val for val in data[data.columns[0]]
+        data = pd.read_csv(file_path, sep=',')
+        time = np.multiply([val for val in data['Cycle']
                             if not(pd.isnull(val))], cycle_time)
+        F_cleaved = 0.0032e9
+        F_uncleaved = 0.00014e9
+
     elif config['plate_reader'] == "AB":
         data = extract_AB(file_path)
         time = np.multiply(data['Cycle'], cycle_time)
+        F_cleaved = 35100e9
+        F_uncleaved = 3380e9
 
     mm_fitting = bool(eval(config["michaelis_menten_fit"]))
     baseline_subtraction = bool(
@@ -70,16 +76,12 @@ try:
             list : progress curve values.
             time : time array.
             """
-            d = -25/12*list[0] + 4*list[1] - 3 * \
-                list[2] + 4/3 * list[3] - 1/4*list[4]
-            v0 = d/(time[1]-time[0])
-            return float(v0)
+            slope, intercept, r, p, se = linregress(time, list)
+            return float(slope), float(intercept)
 
         velocities = np.zeros(len(plate_list))
         for id, plate in enumerate(plate_list):
             # Calibration
-            F_cleaved = config["F_cleaved"]
-            F_uncleaved = config["F_uncleaved"]
             data[plate] = np.multiply(1/(F_cleaved - F_uncleaved),
                                       (np.subtract(data[plate],
                                                    F_uncleaved *
@@ -87,7 +89,7 @@ try:
                                                    )
                                        )
                                       )
-            velocities[id] = calc_velocities(data[plate], time)
+            velocities[id] = calc_velocities(data[plate], time)[0]
 
         def michaelis_menten_fun(x, kcatf, Kmf):
             """
@@ -96,7 +98,7 @@ try:
             kcat : kcat constant of the Michaelis-Menten model.
             Km : Km constant of the Michaelis-Menten model.
             """
-            return(np.divide(np.multiply(kcatf*E0, x), (np.add(x, Kmf))))
+            return np.divide(np.multiply(kcatf*E0, x), (np.add(x, Kmf)))
 
         # Fit
         param, cov = curve_fit(
@@ -106,14 +108,20 @@ try:
         )
 
         # Plot and print results
-        plt.plot(substrate_concentrations, velocities, '.')
-        plt.plot(substrate_concentrations, michaelis_menten_fun(
-            substrate_concentrations,
+        plt.plot(np.multiply(substrate_concentrations, 1e6), velocities, '.')
+        cont_substrate = np.linspace(min(substrate_concentrations),
+                                     max(substrate_concentrations), 1000)
+        plt.plot(np.multiply(cont_substrate, 1e6),
+                 michaelis_menten_fun(
+            cont_substrate,
             param[0], param[1]))
+        plt.xlabel(r'$S_0$ [$\mu$M]')
+        plt.ylabel(r'$V_0$ [M/s]')
         print(
             "Results of the fit (Michaelis-Menten): \n kcat = "
             + str(param[0]) + ' s^(-1)\n Km = '
-            + str(param[1])+' M')
+            + str(param[1])+' M \n'
+        )
         plt.show()
 
     # Progress curve fitting (Schnell-Mendoza solution)
@@ -133,8 +141,6 @@ try:
             S0 = substrate_concentrations[id]
             print(S0)
             # Calibration
-            F_cleaved = config["F_cleaved"]
-            F_uncleaved = config["F_uncleaved"]
             new_data[plate] = np.multiply(1/(F_cleaved - F_uncleaved),
                                           (np.subtract(new_data[plate],
                                                        F_uncleaved*S0)
@@ -163,8 +169,8 @@ try:
 
             # Length homogeneity
             id_max = min(len(time), len(new_data[plate]))
-            new_data[plate] = new_data[plate][0:id_max-1]
-            time = time[0:id_max-1]
+            new_data[plate] = new_data[plate][0:id_max]
+            time = time[0:id_max]
 
             # Fit
             param, cov = curve_fit(schnell_mendoza, time, new_data[plate])
