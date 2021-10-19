@@ -14,9 +14,9 @@ if __name__ == "__main__":
     root.withdraw()
     file_path = filedialog.askopenfilename()
     root.destroy()
-    plt.rcParams.update({'font.size': 18})
+    plt.rcParams.update({'font.size': 15})
 
-try:
+if True:
     # Inputs (config.json file)
     with open("config.json") as f:
         config = json.load(f)
@@ -52,6 +52,7 @@ try:
         F_uncleaved = 3380e9
 
     mm_fitting = bool(eval(config["michaelis_menten_fit"]))
+    total_fitting = bool(eval(config["progress_curve_fit"]))
     baseline_subtraction = bool(
         eval(config["baseline_subtraction"]))
     plate_list = list(
@@ -68,16 +69,24 @@ try:
             data[plate] = data[plate]-min(data[plate])
 
     # Michaelis-Menten "traditional" fitting
-    if mm_fitting:
-        def calc_velocities(list, time):
+    if mm_fitting and not total_fitting:
+        def calc_velocities(curve, time):
             """
             Computes initial slope of the progress curve using the 4th order
             forward difference scheme.
             list : progress curve values.
             time : time array.
             """
-            slope, intercept, r, p, se = linregress(time, list)
-            return float(slope), float(intercept)
+            id_right = len(curve)
+            best_r = 0
+            best_slope = 0
+            while best_r**2 < 0.8 and id_right > 5:
+                slope, intercept, r, p, se = linregress(time[0:id_right],
+                                                        curve[0:id_right])
+                if r**2 > best_r**2:
+                    best_r, best_slope = r, slope
+                id_right = id_right-1
+            return max(best_slope, 0)
 
         velocities = np.zeros(len(plate_list))
         for id, plate in enumerate(plate_list):
@@ -89,7 +98,7 @@ try:
                                                    )
                                        )
                                       )
-            velocities[id] = calc_velocities(data[plate], time)[0]
+            velocities[id] = calc_velocities(data[plate], time)
 
         def michaelis_menten_fun(x, kcatf, Kmf):
             """
@@ -108,28 +117,48 @@ try:
         )
 
         # Plot and print results
-        plt.plot(np.multiply(substrate_concentrations, 1e6), velocities, '.')
-        cont_substrate = np.linspace(min(substrate_concentrations),
-                                     max(substrate_concentrations), 1000)
-        plt.plot(np.multiply(cont_substrate, 1e6),
-                 michaelis_menten_fun(
-            cont_substrate,
-            param[0], param[1]))
-        plt.xlabel(r'$S_0$ [$\mu$M]')
-        plt.ylabel(r'$V_0$ [M/s]')
-        print(
-            "Results of the fit (Michaelis-Menten): \n kcat = "
-            + str(param[0]) + ' s^(-1)\n Km = '
-            + str(param[1])+' M \n'
-        )
-        plt.show()
+        if np.sqrt(cov[0][0])/param[0] + np.sqrt(cov[1][1])/param[1] <= 1:
+            plt.plot(np.multiply(
+                substrate_concentrations,
+                1e6),
+                velocities, '.',
+                label='Exp')
+            cont_substrate = np.linspace(min(substrate_concentrations),
+                                         max(substrate_concentrations), 1000)
+            plt.plot(np.multiply(cont_substrate, 1e6),
+                     michaelis_menten_fun(
+                cont_substrate,
+                param[0], param[1]),
+                label=r'$K_M$, $k_{cat}$')
+
+            # Plot uncertainty kcat and Km fits
+            plt.plot(np.multiply(cont_substrate, 1e6),
+                     michaelis_menten_fun(
+                cont_substrate,
+                param[0]+cov[0][0], param[1]+cov[1][1]),
+                label=r'$K_M + \sigma_{K_M}$, $k_{cat} + \sigma_{k_{cat}}$')
+            plt.plot(np.multiply(cont_substrate, 1e6),
+                     michaelis_menten_fun(
+                cont_substrate,
+                param[0]-cov[0][0], param[1]-cov[1][1]),
+                label=r'$K_M - \sigma_{K_M}$, $k_{cat} - \sigma_{k_{cat}}$')
+            plt.legend()
+            plt.xlabel(r'$S_0$ [$\mu$M]')
+            plt.ylabel(r'$V_0$ [M/s]')
+            print(
+                "Results of the fit (Michaelis-Menten): \n kcat = "
+                + str(param[0]) + ' s^(-1)\n Km = '
+                + str(param[1])+' M \n'
+            )
+            plt.show()
+        else:
+            print("Michaelis-Menten fit failed.")
 
     # Progress curve fitting (Schnell-Mendoza solution)
-    else:
+    elif total_fitting and not mm_fitting:
         kcat_list = np.zeros(len(plate_list))
         Km_list = np.zeros(len(plate_list))
         t0_list = np.zeros(len(plate_list))
-        S0_ver = np.zeros(len(plate_list))
         new_data = {}
 
         fig, (ax1, ax2) = plt.subplots(1, 2)
@@ -139,7 +168,7 @@ try:
                                if not(pd.isnull(val))]
 
             S0 = substrate_concentrations[id]
-            print(S0)
+
             # Calibration
             new_data[plate] = np.multiply(1/(F_cleaved - F_uncleaved),
                                           (np.subtract(new_data[plate],
@@ -176,7 +205,7 @@ try:
             param, cov = curve_fit(schnell_mendoza, time, new_data[plate])
 
             # Eliminate failed fits and plot progress curves + fits
-            if cov[0][0] + cov[1][1] <= 1e100:
+            if np.sqrt(cov[0][0])/param[0] + np.sqrt(cov[1][1])/param[1] <= 1:
                 ax1.plot(time,
                          np.multiply(1e6, new_data[plate]), '.', markersize=2)
                 kcat_list[id] = param[1]
@@ -187,6 +216,7 @@ try:
             else:
                 ax1.plot(time,
                          np.multiply(1e6, new_data[plate]), 'x')
+                print("Fit for well " + plate + " failed.")
         ax1.set(xlabel=r'$t$ [s]')
         ax1.set(ylabel=r'Cleaved reporters [$\mu$M]')
         # Plot kcat and Km solution
@@ -197,9 +227,11 @@ try:
         ax2.yaxis.tick_right()
         ax2.yaxis.set_label_position("right")
         plt.show()
+    else:
+        print("Only one fit expected, two or zero asked.")
 
 
-except ValueError:
+else:
     print(
         "The CSV file could not be read.\
  Make sure your file is in the right format."
