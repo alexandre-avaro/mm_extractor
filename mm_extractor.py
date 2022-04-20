@@ -13,7 +13,7 @@ if __name__ == "__main__":
     root.withdraw()
     file_path = filedialog.askopenfilename()
     root.destroy()
-    plt.rcParams.update({'font.size': 15})
+    plt.rcParams.update({'font.size': 35})
 
 try:
     # Inputs (config.json file)
@@ -67,7 +67,7 @@ try:
         for plate in plate_list:
             data[plate] = data[plate]-min(data[plate])
 
-    # Michaelis-Menten "traditional" fitting
+    # Michaelis-Menten "traditional" fitting (mode 1)
     if mm_fitting and not total_fitting:
         def moving_average(a, t, n=5):
             ret = np.cumsum(a, dtype=float)
@@ -76,7 +76,7 @@ try:
 
         velocities = np.zeros(len(plate_list))
         for id, plate in enumerate(plate_list):
-            # Calibration
+            # Calibration and smoothing
             data[plate] = np.multiply(1/(F_cleaved - F_uncleaved),
                                       (np.subtract(data[plate],
                                                    F_uncleaved *
@@ -85,6 +85,7 @@ try:
                                        )
                                       )
             smooth_t, smooth_data = moving_average(np.array(data[plate]), time)
+            smooth_t, smooth_data = list(smooth_t), list(smooth_data)
             grad_t, grad = moving_average(
                 np.gradient(smooth_data, smooth_t[1]-smooth_t[0]),
                 smooth_t)
@@ -121,7 +122,7 @@ try:
                 param[0], param[1]),
                 label=r'$K_M$, $k_{cat}$')
 
-            # Plot uncertainty kcat and Km fits
+        # Plot uncertainty kcat and Km fits
             plt.plot(np.multiply(cont_substrate, 1e6),
                      michaelis_menten_fun(
                 cont_substrate,
@@ -133,30 +134,35 @@ try:
                 param[0]-cov[0][0], param[1]-cov[1][1]),
                 label=r'$K_M - \sigma_{K_M}$, $k_{cat} - \sigma_{k_{cat}}$')
             plt.legend()
-            plt.xlabel(r'$S_0$ [$\mu$M]')
+            plt.xlabel(r'$S_0$ [μM]')
             plt.ylabel(r'$V_0$ [M/s]')
             print(
                 "Results of the fit (Michaelis-Menten): \n kcat = "
-                + str(param[0]) + ' s^(-1)\n Km = '
-                + str(param[1])+' M \n'
+                + str(param[0]) + ' s^(-1) +/- ' +
+                str(cov[0][0]) + ' s^(-1) \n Km = '
+                + str(param[1])+' M +/- ' + str(cov[1][1]) + ' M\n' +
+                str(param[0]/param[1]*1e-6)
             )
             plt.show()
         else:
             print("Michaelis-Menten fit failed.")
 
-    # Progress curve fitting (Schnell-Mendoza solution)
+    # Progress curve fitting (Schnell-Mendoza solution, mode 2)
     elif total_fitting and not mm_fitting:
+        # Initialize variables
+        cmap = plt.get_cmap('viridis')
         kcat_list = np.zeros(len(plate_list))
         Km_list = np.zeros(len(plate_list))
+        delta_kcat = np.zeros(len(plate_list))
+        delta_Km = np.zeros(len(plate_list))
         t0_list = np.zeros(len(plate_list))
         new_data = {}
 
         fig, (ax1, ax2) = plt.subplots(1, 2)
         for id, plate in enumerate(plate_list):
-            # Clean the data (if all the exp time are not equal)
+            # Clean data (if all the exp time are not equal)
             new_data[plate] = [val for val in data[plate]
                                if not(pd.isnull(val))]
-
             S0 = substrate_concentrations[id]
 
             # Calibration
@@ -196,30 +202,44 @@ try:
 
             # Eliminate failed fits and plot progress curves + fits
             if np.sqrt(cov[0][0])/param[0] + np.sqrt(cov[1][1])/param[1] <= 1:
-                ax1.plot(time,
-                         np.multiply(1e6, new_data[plate]), '.', markersize=2)
+                ax1.plot(time/60,
+                         np.multiply(1e9, new_data[plate]), '.', markersize=2,
+                         color=cmap(id/len(plate_list)))
                 kcat_list[id] = param[1]
+                delta_kcat[id] = np.sqrt(cov[1][1])
+
                 Km_list[id] = param[0]
+                delta_Km[id] = np.sqrt(cov[0][0])
+
                 t0_list[id] = param[2]
-                ax1.plot(time, np.multiply(1e6, schnell_mendoza(
-                    time, param[0], param[1], param[2])))
+                ax1.plot(time/60, np.multiply(1e9, schnell_mendoza(
+                    time, param[0], param[1], param[2])),
+                    color=cmap(id/len(plate_list)))
             else:
-                ax1.plot(time,
-                         np.multiply(1e6, new_data[plate]), 'x')
+                ax1.plot(time/60,
+                         np.multiply(1e9, new_data[plate]), 'x',
+                         color=cmap(id/len(plate_list)))
                 print("Fit for well " + plate + " failed.")
-        ax1.set(xlabel=r'$t$ [s]')
-        ax1.set(ylabel=r'Cleaved reporters [$\mu$M]')
+        ax1.set(xlabel=r'Time [min]')
+        ax1.set(ylabel=r'Cleaved reporters [nM]')
         # Plot kcat and Km solution
-        ax2.plot(np.multiply(Km_list[Km_list != 0], 1e6),
-                 kcat_list[kcat_list != 0], '.')
-        ax2.set(xlabel=r'$K_M$ [$\mu$M]')
+        for id in range(len(plate_list)):
+            if (Km_list[id]*kcat_list[id] != 0):
+                ax2.plot(np.multiply(Km_list[id], 1e6), kcat_list[id], '.',
+                         markersize=40, fillstyle='none',
+                         markeredgewidth=2,
+                         color=cmap(id/len(plate_list)))
+                ax2.errorbar(np.multiply(Km_list[id], 1e6), kcat_list[id],
+                             1e6*delta_Km[id], delta_kcat[id],
+                             capsize=10,
+                             ecolor=cmap(id/len(plate_list)))
+        ax2.set(xlabel=r'$K_M$ [μM]')
         ax2.set(ylabel=r'$k_{cat}$ $[s^{-1}]$')
         ax2.yaxis.tick_right()
         ax2.yaxis.set_label_position("right")
         plt.show()
     else:
         print("Only one fit expected, two or zero asked.")
-
 
 except ValueError:
     print(
