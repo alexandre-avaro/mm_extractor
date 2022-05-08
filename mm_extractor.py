@@ -66,6 +66,49 @@ try:
             ff_data[k] = [np.median(ff_import[k])]
             bg_data[k] = [np.median(bg_import[k])]
 
+        # Calibration curve
+        signal_uncleaved_calib = []
+        signal_cleaved_calib = []
+        concentrations = []
+
+        def calibration_curve(x, F, c0, a):
+            return (a+F*x*10**(-x/c0))
+
+        for i, k in enumerate(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']):
+            signal_uncleaved_calib.append(
+                ((np.median(calibration_data[k+'1'])-bg_data[k+'1'])/(
+                    ff_data[k+'1']-bg_data[k+'1']))[0])
+            signal_uncleaved_calib.append(
+                ((np.median(calibration_data[k+'2'])-bg_data[k+'2'])/(
+                    ff_data[k+'2']-bg_data[k+'2']))[0])
+            signal_uncleaved_calib.append(((
+                np.median(calibration_data[k+'3'])-bg_data[k+'3'])/(
+                    ff_data[k+'3']-bg_data[k+'3']))[0])
+            signal_cleaved_calib.append(((
+                np.median(calibration_data[k+'4'])-bg_data[k+'4'])/(
+                    ff_data[k+'4']-bg_data[k+'4']))[0])
+            signal_cleaved_calib.append(((
+                np.median(calibration_data[k+'5'])-bg_data[k+'5'])/(
+                    ff_data[k+'5']-bg_data[k+'5']))[0])
+            signal_cleaved_calib.append(((
+                np.median(calibration_data[k+'6'])-bg_data[k+'6'])/(
+                    ff_data[k+'6']-bg_data[k+'6']))[0])
+            concentrations.append(2**(1-i))
+            concentrations.append(2**(1-i))
+            concentrations.append(2**(1-i))
+
+        params_cleaved, cov = curve_fit(calibration_curve, concentrations,
+                                        signal_cleaved_calib, bounds=([
+                                            0, 2, 0],
+                                            [np.inf, np.inf, np.inf]))
+        params_uncleaved, cov = curve_fit(calibration_curve, concentrations,
+                                          signal_uncleaved_calib, bounds=([
+                                              0, 2, 0],
+                                              [np.inf, np.inf, np.inf]))
+        F_cleaved = params_cleaved[0]
+        F_uncleaved = params_uncleaved[0]
+        c0 = params_uncleaved[1]
+
     elif config['plate_reader'] == "AB":
         data = extract_AB(file_path)
         time = np.multiply(data['Cycle'], cycle_time)
@@ -76,49 +119,6 @@ try:
     if baseline_subtraction:
         for plate in plate_list:
             data[plate] = data[plate]-min(data[plate])
-
-    # Calibration curve
-    signal_uncleaved_calib = []
-    signal_cleaved_calib = []
-    concentrations = []
-
-    def calibration_curve(x, F, c0, a):
-        return (a+F*x*10**(-x/c0))
-
-    for i, k in enumerate(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']):
-        signal_uncleaved_calib.append(
-            ((np.median(calibration_data[k+'1'])-bg_data[k+'1'])/(
-                ff_data[k+'1']-bg_data[k+'1']))[0])
-        signal_uncleaved_calib.append(
-            ((np.median(calibration_data[k+'2'])-bg_data[k+'2'])/(
-                ff_data[k+'2']-bg_data[k+'2']))[0])
-        signal_uncleaved_calib.append(((
-            np.median(calibration_data[k+'3'])-bg_data[k+'3'])/(
-                ff_data[k+'3']-bg_data[k+'3']))[0])
-        signal_cleaved_calib.append(((
-            np.median(calibration_data[k+'4'])-bg_data[k+'4'])/(
-                ff_data[k+'4']-bg_data[k+'4']))[0])
-        signal_cleaved_calib.append(((
-            np.median(calibration_data[k+'5'])-bg_data[k+'5'])/(
-                ff_data[k+'5']-bg_data[k+'5']))[0])
-        signal_cleaved_calib.append(((
-            np.median(calibration_data[k+'6'])-bg_data[k+'6'])/(
-                ff_data[k+'6']-bg_data[k+'6']))[0])
-        concentrations.append(2**(1-i))
-        concentrations.append(2**(1-i))
-        concentrations.append(2**(1-i))
-
-    params_cleaved, cov = curve_fit(calibration_curve, concentrations,
-                                    signal_cleaved_calib, bounds=([
-                                        0, 2, 0],
-                                        [np.inf, np.inf, np.inf]))
-    params_uncleaved, cov = curve_fit(calibration_curve, concentrations,
-                                      signal_uncleaved_calib, bounds=([
-                                          0, 2, 0],
-                                          [np.inf, np.inf, np.inf]))
-    F_cleaved = params_cleaved[0]
-    F_uncleaved = params_uncleaved[0]
-    c0 = params_uncleaved[1]
 
     # Michaelis-Menten "traditional" fitting (mode 1)
     if mm_fitting and not total_fitting:
