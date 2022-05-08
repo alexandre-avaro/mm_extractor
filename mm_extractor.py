@@ -16,11 +16,22 @@ if __name__ == "__main__":
     plt.rcParams.update({'font.size': 35})
 
 try:
-    # Inputs (config.json file)
+    # Read inputs (config.json file)
     with open("config.json") as f:
         config = json.load(f)
 
     cycle_time = float(config["cycle_time"])
+    mm_fitting = bool(eval(config["michaelis_menten_fit"]))
+    total_fitting = bool(eval(config["progress_curve_fit"]))
+    baseline_subtraction = bool(
+        eval(config["baseline_subtraction"]))
+    plate_list = list(
+        map(str, config['plate_list'].replace(" ", "").split(',')))
+    E0 = 1e-9*float(config["enzyme_concentration"])
+    substrate_concentrations = np.multiply(list(
+        map(
+            float,
+            config["substrate_concentration"].split(','))), 1e-6)
 
     def extract_AB(file_path):
         """
@@ -39,10 +50,21 @@ try:
 
     if config['plate_reader'] == "BioRad":
         data = pd.read_csv(file_path, sep=',')
+        calibration_data = pd.read_csv("./calibration_data.csv", sep=',')
+        ff_data = pd.read_csv('./flat-field.csv', sep=',')
+        bg_data = pd.read_csv('./background.csv', sep=',')
         time = np.multiply([val for val in data['Cycle']
                             if not(pd.isnull(val))], cycle_time)
-        F_cleaved = 0.0032e9
-        F_uncleaved = 0.00014e9
+
+        # Import flat-field and background data
+        ff_import = pd.read_csv('./flat-field.csv', sep=',')
+        ff_data = pd.DataFrame()
+        bg_import = pd.read_csv('./background.csv', sep=',')
+        bg_data = pd.DataFrame()
+
+        for k in ff_import.keys()[2:]:
+            ff_data[k] = [np.median(ff_import[k])]
+            bg_data[k] = [np.median(bg_import[k])]
 
     elif config['plate_reader'] == "AB":
         data = extract_AB(file_path)
@@ -50,26 +72,60 @@ try:
         F_cleaved = 35100e9
         F_uncleaved = 3380e9
 
-    mm_fitting = bool(eval(config["michaelis_menten_fit"]))
-    total_fitting = bool(eval(config["progress_curve_fit"]))
-    baseline_subtraction = bool(
-        eval(config["baseline_subtraction"]))
-    plate_list = list(
-        map(str, config['plate_list'].replace(" ", "").split(',')))
-    E0 = 1e-9*float(config["enzyme_concentration"])
-    substrate_concentrations = np.multiply(list(
-        map(
-            float,
-            config["substrate_concentration"].split(','))), 1e-6)
-
     # Baseline subtraction
     if baseline_subtraction:
         for plate in plate_list:
             data[plate] = data[plate]-min(data[plate])
 
+    # Calibration curve
+    signal_uncleaved_calib = []
+    signal_cleaved_calib = []
+    concentrations = []
+
+    def calibration_curve(x, F, c0, a):
+        return (a+F*x*10**(-x/c0))
+
+    for i, k in enumerate(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']):
+        signal_uncleaved_calib.append(
+            ((np.median(calibration_data[k+'1'])-bg_data[k+'1'])/(
+                ff_data[k+'1']-bg_data[k+'1']))[0])
+        signal_uncleaved_calib.append(
+            ((np.median(calibration_data[k+'2'])-bg_data[k+'2'])/(
+                ff_data[k+'2']-bg_data[k+'2']))[0])
+        signal_uncleaved_calib.append(((
+            np.median(calibration_data[k+'3'])-bg_data[k+'3'])/(
+                ff_data[k+'3']-bg_data[k+'3']))[0])
+        signal_cleaved_calib.append(((
+            np.median(calibration_data[k+'4'])-bg_data[k+'4'])/(
+                ff_data[k+'4']-bg_data[k+'4']))[0])
+        signal_cleaved_calib.append(((
+            np.median(calibration_data[k+'5'])-bg_data[k+'5'])/(
+                ff_data[k+'5']-bg_data[k+'5']))[0])
+        signal_cleaved_calib.append(((
+            np.median(calibration_data[k+'6'])-bg_data[k+'6'])/(
+                ff_data[k+'6']-bg_data[k+'6']))[0])
+        concentrations.append(2**(1-i))
+        concentrations.append(2**(1-i))
+        concentrations.append(2**(1-i))
+
+    params_cleaved, cov = curve_fit(calibration_curve, concentrations,
+                                    signal_cleaved_calib, bounds=([
+                                        0, 2, 0],
+                                        [np.inf, np.inf, np.inf]))
+    params_uncleaved, cov = curve_fit(calibration_curve, concentrations,
+                                      signal_uncleaved_calib, bounds=([
+                                          0, 2, 0],
+                                          [np.inf, np.inf, np.inf]))
+    F_cleaved = params_cleaved[0]
+    F_uncleaved = params_uncleaved[0]
+    c0 = params_uncleaved[1]
+
     # Michaelis-Menten "traditional" fitting (mode 1)
     if mm_fitting and not total_fitting:
         def moving_average(a, t, n=5):
+            """
+            Smoothing operator
+            """
             ret = np.cumsum(a, dtype=float)
             ret[n:] = ret[n:] - ret[:-n]
             return t[int(np.floor(n/2)):-int(np.floor(n/2))], ret[n - 1:] / n
@@ -77,7 +133,10 @@ try:
         velocities = np.zeros(len(plate_list))
         for id, plate in enumerate(plate_list):
             # Calibration and smoothing
-            data[plate] = np.multiply(1/(F_cleaved - F_uncleaved),
+            data[plate] = (data[plate] - bg_data[plate][0])/(
+                ff_data[plate][0] - bg_data[plate][0])
+            data[plate] = np.multiply(10**(-substrate_concentrations[id]/c0) /
+                                      (F_cleaved - F_uncleaved),
                                       (np.subtract(data[plate],
                                                    F_uncleaved *
                                                    substrate_concentrations[id]
@@ -86,10 +145,11 @@ try:
                                       )
             smooth_t, smooth_data = moving_average(np.array(data[plate]), time)
             smooth_t, smooth_data = list(smooth_t), list(smooth_data)
+            smooth_data = smooth_data - np.min(smooth_data)
             grad_t, grad = moving_average(
                 np.gradient(smooth_data, smooth_t[1]-smooth_t[0]),
                 smooth_t)
-            velocities[id] = np.max(grad)
+            velocities[id] = np.max(grad)*1e-6
 
         def michaelis_menten_fun(x, kcatf, Kmf):
             """
@@ -112,7 +172,7 @@ try:
             plt.plot(np.multiply(
                 substrate_concentrations,
                 1e6),
-                velocities, '.',
+                velocities, 'o', fillstyle='none', markersize=14,
                 label='Exp')
             cont_substrate = np.linspace(min(substrate_concentrations),
                                          max(substrate_concentrations), 1000)
@@ -165,8 +225,12 @@ try:
                                if not(pd.isnull(val))]
             S0 = substrate_concentrations[id]
 
-            # Calibration
-            new_data[plate] = np.multiply(1/(F_cleaved - F_uncleaved),
+            # Calibration and FF/BG
+            new_data[plate] = (new_data[plate] - bg_data[plate][0])/(
+                ff_data[plate][0] - bg_data[plate][0])
+
+            new_data[plate] = np.multiply(10**(-S0/c0) /
+                                          (F_cleaved - F_uncleaved),
                                           (np.subtract(new_data[plate],
                                                        F_uncleaved*S0)
                                            )
@@ -203,7 +267,7 @@ try:
             # Eliminate failed fits and plot progress curves + fits
             if np.sqrt(cov[0][0])/param[0] + np.sqrt(cov[1][1])/param[1] <= 1:
                 ax1.plot(time/60,
-                         np.multiply(1e9, new_data[plate]), '.', markersize=2,
+                         np.multiply(1e3, new_data[plate]), '.', markersize=2,
                          color=cmap(id/len(plate_list)))
                 kcat_list[id] = param[1]
                 delta_kcat[id] = np.sqrt(cov[1][1])
@@ -212,16 +276,17 @@ try:
                 delta_Km[id] = np.sqrt(cov[0][0])
 
                 t0_list[id] = param[2]
-                ax1.plot(time/60, np.multiply(1e9, schnell_mendoza(
+                ax1.plot(time/60, np.multiply(1e3, schnell_mendoza(
                     time, param[0], param[1], param[2])),
                     color=cmap(id/len(plate_list)))
             else:
                 ax1.plot(time/60,
-                         np.multiply(1e9, new_data[plate]), 'x',
+                         np.multiply(1e3, new_data[plate]), 'x',
                          color=cmap(id/len(plate_list)))
                 print("Fit for well " + plate + " failed.")
         ax1.set(xlabel=r'Time [min]')
         ax1.set(ylabel=r'Cleaved reporters [nM]')
+
         # Plot kcat and Km solution
         for id in range(len(plate_list)):
             if (Km_list[id]*kcat_list[id] != 0):
@@ -238,6 +303,7 @@ try:
         ax2.yaxis.tick_right()
         ax2.yaxis.set_label_position("right")
         plt.show()
+
     else:
         print("Only one fit expected, two or zero asked.")
 
